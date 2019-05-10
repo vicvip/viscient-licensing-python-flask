@@ -175,8 +175,6 @@ class MainClass(Resource):
     def get(self):
         try:
             users = mongoClient.db.credentials.find({"accountType": "user"})
-            print(users)
-            print(users[0])
 
             if(users.count() < 1):
                 return "empty database"
