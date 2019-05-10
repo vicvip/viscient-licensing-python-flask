@@ -105,7 +105,6 @@ class MainClass(Resource):
                     })
     def get(self):
         try:
-            #sort=[( '_id', pymongo.DESCENDING )]
             username = request.args.get('username')
             accountType = request.args.get('accountType')
 
@@ -132,33 +131,8 @@ class MainClass(Resource):
                     'dateExpired': history['dateExpired'].isoformat(),
                 }
                 historyDetails.append(historyDetail)
-                #print(historyDetails)
             
             return jsonify(historyDetails=historyDetails, statusCode=200)
-            #resp = jsonify(data=history)
-            #return resp
-            #print(history[0])
-            #return Response(json.dumps({'data': history}, default=json_util.default),
-                #mimetype='application/json') 
-            #return bson.json_util.dumps({ 'success': True, 'mycollectionKey': historyDetails })
-            #return json.loads(history)
-            #jsonList = list(history)
-            #return jsonList
-            #return json.dumps(jsonList, default=json_util.default)
-            #return bson.json_util.dumps(jsonList, default=json_util.default)
-            # query = mongoClient.db.credentials.find({ "username": username, "password": password })
-            # print(query)
-            # customCode = 404
-            # customMessage = 'No such user found'
-
-            # if(query.count() > 0):
-            #     customCode = 200
-            #     customMessage = 'User found'
-
-            # return {
-            #     "username": username,
-            #     "accountType": accountType,
-            # }
         except KeyError as e:
             mongo_db_service.abort(400, e.__doc__, status = "Could not save information", statusCode = "400")
         except Exception as e:
@@ -216,11 +190,9 @@ class MainClass(Resource):
                     'accountType': user['accountType']
                 }
                 userDetails.append(userDetail)
-                #print(historyDetails)
             
             return jsonify(userDetails=userDetails, statusCode=200)
-                
-            #return "ok"
+
         except KeyError as e:
             mongo_db_service.abort(400, e.__doc__, status = "Could not save information", statusCode = "400")
         except Exception as e:
@@ -283,28 +255,10 @@ class MainClass(Resource):
                 "license": licenseResponse,
                 "credit": creditResponse
             }
-            # return {
-            # 	"status": "New person added",
-            # 	"name": list_of_names[id]
-            # }
         except KeyError as e:
             licensing.abort(500, e.__doc__, status = "Could not retrieve information", statusCode = "500")
         except Exception as e:
             licensing.abort(400, e.__doc__, status = "Could not retrieve information", statusCode = "400")
-
-    # @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Mapping Key Error' }, 
-    #             params={ 'id': 'Specify the Id associated with the person' })
-    # @app.expect(model)		
-    # def post(self, id):
-    #     try:
-    #         return {
-    #             "status": "New person added",
-    #             "name": list_of_names[id]
-    #         }
-    #     except KeyError as e:
-    #         licensing.abort(500, e.__doc__, status = "Could not save information", statusCode = "500")
-    #     except Exception as e:
-    #         licensing.abort(400, e.__doc__, status = "Could not save information", statusCode = "400")
 
 @licensing.route("/activation")
 class MainClass(Resource):
@@ -368,7 +322,6 @@ class MainClass(Resource):
                 
             insertResult = insert_history(username, "Extend POC", domainName, numberOfDays)
             decrementResponse = inc_poc_license(username, accountType, -1)
-            #send_email_notification()
             email_notification_response = send_email_mailjet(insertResult["new_history"])
 
             return {
@@ -470,47 +423,3 @@ def send_email_mailjet(new_history):
     }
     result = mailjet.send.create(data=data)
     return result.status_code
-
-# @app.route('/login', methods=['GET','POST'])
-# def login():
-#   if request.method == 'POST':
-#     #check user details from db
-#     login_user()
-#   elif request.method == 'GET':
-#     #serve login page
-#     serve_login_page()
-
-# @app.route('/user', methods=['POST'])
-# def get_user():
-#   username = request.form['username']
-#   password = request.form['password']
-#   #login(arg,arg) is a function that tries to log in and returns true or false
-#   #status = login(username, password)
-#   return username
-
-# @app.route('/')
-# def index():
-#   return 'Index Page'
-
-# @app.route('/query_license/<company_name>', methods=['POST'])
-# def query_license(company_name):
-#     endpoint = 'https://viscientgateway.ddns.net:8899/VLREST/v1/query_license'
-#     post_url = endpoint
-#     response = requests.post(post_url, data=None, headers=None)
-#     print(response.content)
-#     return response.content
-
-# @app.route('/post/<username>')
-# def show_post(username):
-#     client = pymongo.MongoClient("mongodb+srv://viscient:P!nkUnic0rn@viscient-cluster-dmqxq.gcp.mongodb.net/?retryWrites=true")
-#     database = client["viscient-licensing"]
-#     collection = database["credentials"]
-
-#     #myquery = {}
-
-#     query = collection.find({ "username": username })
-#     print(query.count())
-#     #print(str(mydoc))
-    
-#     #returns the post, the post_id should be an int
-#     return "test"
