@@ -9,6 +9,7 @@ from flask_pymongo import PyMongo
 from datetime import datetime, timedelta
 from bson.json_util import dumps, RELAXED_JSON_OPTIONS
 from bson import json_util
+from mailjet_rest import Client
 
 flask_app = Flask(__name__)
 
@@ -327,15 +328,16 @@ class MainClass(Resource):
                     "message": "Error in Activating POC License",
                 }
 
-            insertResponse = insert_history(username, "Activate POC", domainName, numberOfDays)
+            insertResult = insert_history(username, "Activate POC", domainName, numberOfDays)
             decrementResponse = inc_poc_license(username, accountType, -1)
-            #send_email_notification()
+            email_notification_response = send_email_mailjet(insertResult["new_history"])
             
             return {
                 "statusCode": 200,
                 "message": "Success",
-                "insertResponse": insertResponse,
-                "decrementResponse": decrementResponse
+                "insertResponse": insertResult["insert_response"],
+                "decrementResponse": decrementResponse,
+                "email_notification_response": email_notification_response
             }
         except KeyError as e:
             licensing.abort(400, e.__doc__, status = "Could not retrieve information", statusCode = "400")
@@ -364,15 +366,17 @@ class MainClass(Resource):
                     "message": "Error in Extending POC License",
                 }
                 
-            insertResponse = insert_history(username, "Extend POC", domainName, numberOfDays)
+            insertResult = insert_history(username, "Extend POC", domainName, numberOfDays)
             decrementResponse = inc_poc_license(username, accountType, -1)
             #send_email_notification()
+            email_notification_response = send_email_mailjet(insertResult["new_history"])
 
             return {
                 "statusCode": 200,
                 "message": "Success",
-                "insertResponse": insertResponse,
-                "decrementResponse": decrementResponse
+                "insertResponse": insertResult["insert_response"],
+                "decrementResponse": decrementResponse,
+                "email_notification_response": email_notification_response
             }
         except KeyError as e:
             licensing.abort(400, e.__doc__, status = "Could not retrieve information", statusCode = "400")
@@ -381,7 +385,7 @@ class MainClass(Resource):
 
 
 def insert_history(username, actionType, domainName, numberOfDays):
-    newHistory = {
+    new_history = {
                     "username": username,
                     "actionType": actionType,
                     "domainName": domainName,
@@ -389,8 +393,11 @@ def insert_history(username, actionType, domainName, numberOfDays):
                     "dateExpired": datetime.utcnow() + timedelta(days=numberOfDays)
                 }
                 
-    response = mongoClient.db.history.insert_one(newHistory)
-    return 200
+    response = mongoClient.db.history.insert_one(new_history)
+    return {
+        "insert_response": 200,
+        "new_history": new_history
+    }
     
 def inc_poc_license(username, accountType, inc_value):
     if(accountType == "admin"):
@@ -427,6 +434,42 @@ def send_email_notification():
     except:  
         print('Error occured')
 
+def send_email_mailjet(new_history):
+    api_key = 'a69cb7f74803eeeed3c31b28a62a8642'
+    api_secret = '1998b948eba95af112065aa042ceb838'
+    mailjet = Client(auth=(api_key, api_secret), version='v3.1')
+
+    construct_message_subject = f'A new "{new_history["actionType"]}" has been triggered from {new_history["username"]}'
+
+    construct_message_body = f'''<h3>Automated Email Notification from Viscient BackEnd</h3>
+                                    <p>A new "{new_history["actionType"]}" has occured for "{new_history["username"]}" on "{new_history["domainName"]}".</p>
+                                    <p>Date created (UTC): {new_history["dateCreated"]}</p>
+                                    <p>Date expired (UTC): {new_history["dateExpired"]}</p>
+                                    <br>
+                                    <p>Cheers,</p>
+                                    <p>Viscient BackEnd via MailJet</p>'''
+
+    data = {
+    'Messages': [
+                    {
+                        "From": {
+                                "Email": "admin@viscientml.com",
+                                "Name": "Me"
+                        },
+                        "To": [
+                                {
+                                        "Email": "admin@viscientml.com",
+                                        "Name": "You"
+                                }
+                        ],
+                        "Subject": construct_message_subject,
+                        "TextPart": "Greetings from Mailjet!",
+                        "HTMLPart": construct_message_body
+                    }
+            ]
+    }
+    result = mailjet.send.create(data=data)
+    return result.status_code
 
 # @app.route('/login', methods=['GET','POST'])
 # def login():
