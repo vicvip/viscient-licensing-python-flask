@@ -10,13 +10,24 @@ from datetime import datetime, timedelta
 from bson.json_util import dumps, RELAXED_JSON_OPTIONS
 from bson import json_util
 from mailjet_rest import Client
+from functools import wraps
 
 flask_app = Flask(__name__)
 
 flask_app.config["MONGO_URI"] = "mongodb+srv://viscient:P!nkUnic0rn@viscient-cluster-dmqxq.gcp.mongodb.net/viscient-licensing?retryWrites=true"
-mongoClient = PyMongo(flask_app)
+mongo_client = PyMongo(flask_app)
+
+authorizations = {
+    'apikey': {
+        'type': 'apiKey',
+        'in': 'header',
+        'name': 'X-API-KEY'
+    }
+}
 
 app = Api(app = flask_app, 
+          authorizations = authorizations,
+          security='apikey',
 		  version = "1.0", 
 		  title = "Viscient Licensing BackEnd", 
 		  description = "Thin layer to provide endpoints for the Front End")
@@ -25,6 +36,7 @@ licensing = app.namespace('licensing', description='Endpoints that talks to Visc
 mongo_db_service = app.namespace('mongodbservice', description='Endpoints that talks to MongoDb')
 
 VISCIENT_API_URL = 'https://viscientgateway.ddns.net:8899/VLREST/v1'
+API_KEY = 'OdRGF2aAqH323q0WlX5JOfRtaCVpQbbN'
 
 model = app.model('Name Model', 
         {
@@ -62,10 +74,23 @@ increment_model = app.model('Increment Credit Model',
                     'increment_value': fields.Integer(required = True, 
                             description="Number of credit to add to the respective user")
                     })
-                            
+
+def token_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        token = None
+        if('X-API-KEY' in request.headers):
+            token = request.headers['X-API-KEY']
+        if not token:
+            return {'message': 'User not authorized.'}, 401
+        if token != API_KEY:
+            return {'message': 'Authorization failed.'}, 403
+        return f(*args, **kwargs)
+    return decorated
 
 @mongo_db_service.route("/login")
 class MainClass(Resource):
+    @token_required
     @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' })
     @app.expect(credential_model)
     def post(self):
@@ -73,12 +98,12 @@ class MainClass(Resource):
             username = request.json['username']
             password = request.json['password']
 
-            user = mongoClient.db.credentials.find_one({ "username": username, "password": password })
+            user = mongo_client.db.credentials.find_one({ "username": username, "password": password })
 
             if(user is None):
                 return {
                     "username": username,
-                    "statusCode": 404,
+                    "status_code": 404,
                     "message": 'No such user found',
                     "accountType": ''
                 }
@@ -87,17 +112,18 @@ class MainClass(Resource):
 
             return {
                 "username": username,
-                "statusCode": 200,
+                "status_code": 200,
                 "message": "User found",
                 "accountType": accountType
             }
         except KeyError as e:
-            mongo_db_service.abort(400, e.__doc__, status = "Could not save information", statusCode = "400")
+            mongo_db_service.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
-            mongo_db_service.abort(500, e.__doc__, status = "Exception from the method", statusCode = "500")
+            mongo_db_service.abort(500, e.__doc__, status = "Exception from Login method", status_code = "500")
 
 @mongo_db_service.route("/history")
 class MainClass(Resource):
+    @token_required
     @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' },
             params= {        
                     'username': 'Specify the username to fetch its history in MongoDb',
@@ -110,18 +136,18 @@ class MainClass(Resource):
 
             histories = None
             if(accountType == 'admin'):
-                histories = mongoClient.db.history.find({}).sort( 'dateCreated', pymongo.DESCENDING )
+                histories = mongo_client.db.history.find({}).sort( 'dateCreated', pymongo.DESCENDING )
             else:
-                histories = mongoClient.db.history.find({'username': username}).sort( 'dateCreated', pymongo.DESCENDING )
+                histories = mongo_client.db.history.find({'username': username}).sort( 'dateCreated', pymongo.DESCENDING )
             
             if(histories == None):
                 return {
-                    "statusCode": 404,
+                    "status_code": 404,
                     "message": "No such user found in History collection",
                     "username": username
                 }
 
-            historyDetails = []
+            history_details = []
             for history in histories:
                 historyDetail = {
                     'username': history['username'],
@@ -130,28 +156,29 @@ class MainClass(Resource):
                     'dateCreated': history['dateCreated'].isoformat(),
                     'dateExpired': history['dateExpired'].isoformat(),
                 }
-                historyDetails.append(historyDetail)
+                history_details.append(historyDetail)
             
-            return jsonify(historyDetails=historyDetails, statusCode=200)
+            return jsonify(history_details=history_details, status_code=200)
         except KeyError as e:
-            mongo_db_service.abort(400, e.__doc__, status = "Could not save information", statusCode = "400")
+            mongo_db_service.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
-            mongo_db_service.abort(500, e.__doc__, status = "Exception from the method", statusCode = "500")
+            mongo_db_service.abort(500, e.__doc__, status = "Exception from History method", status_code = "500")
 
 @mongo_db_service.route("/user_counter")
 class MainClass(Resource):
+    @token_required
     @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' },
             params= { 'username': 'Specify the username to fetch its history in MongoDb' })
     def get(self):
         try:
             username = request.args.get('username')
 
-            user = mongoClient.db.credentials.find_one({ "username": username })
+            user = mongo_client.db.credentials.find_one({ "username": username })
 
             if(user is None):
                 return {
                     "username": username,
-                    "statusCode": 404,
+                    "status_code": 404,
                     "message": 'No such user found',
                     "poc_counter": 0
                 }
@@ -160,44 +187,47 @@ class MainClass(Resource):
 
             return {
                 "username": username,
-                "statusCode": 200,
+                "status_code": 200,
                 "message": 'User found along with its counter',
                 "poc_counter": counter
             }
         except KeyError as e:
-            mongo_db_service.abort(400, e.__doc__, status = "Could not save information", statusCode = "400")
+            mongo_db_service.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
-            mongo_db_service.abort(500, e.__doc__, status = "Exception from the method", statusCode = "500")
+            mongo_db_service.abort(500, e.__doc__, status = "Exception from User Counter method", status_code = "500")
+
 
 @mongo_db_service.route("/all_user")
 class MainClass(Resource):
+    @token_required
     @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' })
     def get(self):
         try:
-            users = mongoClient.db.credentials.find({"accountType": "user"})
+            users = mongo_client.db.credentials.find({"accountType": "user"})
 
             if(users.count() < 1):
                 return "empty database"
 
             userList = list(users)
-            userDetails = []
+            user_details = []
             for user in userList:
                 userDetail = {
                     'username': user['username'],
                     'pocLicenseCounter': user['pocLicenseCounter'],
                     'accountType': user['accountType']
                 }
-                userDetails.append(userDetail)
+                user_details.append(userDetail)
             
-            return jsonify(userDetails=userDetails, statusCode=200)
+            return jsonify(user_details=user_details, status_code=200)
 
         except KeyError as e:
-            mongo_db_service.abort(400, e.__doc__, status = "Could not save information", statusCode = "400")
+            mongo_db_service.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
-            mongo_db_service.abort(500, e.__doc__, status = "Exception from the method", statusCode = "500")
+            mongo_db_service.abort(500, e.__doc__, status = "Exception from All User method", status_code = "500")
 
 @mongo_db_service.route("/increment_user_credit")
 class MainClass(Resource):
+    @token_required
     @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' })
     @app.expect(increment_model)
     def post(self):
@@ -210,24 +240,25 @@ class MainClass(Resource):
             if(increment_response is None):
                 return {
                     "username": username,
-                    "statusCode": 500,
+                    "status_code": 500,
                     "increment_response": 500,
                     "message": 'Error incrementing user credit'
                 }
 
             return {
                 "username": username,
-                "statusCode": 200,
+                "status_code": 200,
                 "increment_response": increment_response,
                 "message": "Successfully increment credit to user"
             }
         except KeyError as e:
-            mongo_db_service.abort(400, e.__doc__, status = "Could not save information", statusCode = "400")
+            mongo_db_service.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
-            mongo_db_service.abort(500, e.__doc__, status = "Exception from the method", statusCode = "500")
+            mongo_db_service.abort(500, e.__doc__, status = "Exception from Increment User Credit method", status_code = "500")
 
 @licensing.route("/query_licensing")
 class MainClass(Resource):
+    @token_required
     @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Mapping Key Error' }, 
                 params={ 'username': 'Specify the username to fetch in Viscient Licensing API' })
     def get(self):
@@ -240,7 +271,7 @@ class MainClass(Resource):
             responseCode = parsedResponse["code"]
             if(responseCode != 200):
                 return {
-                    "statusCode": 500,
+                    "status_code": 500,
                     "license": None,
                     "credit": None
                 }
@@ -249,17 +280,18 @@ class MainClass(Resource):
             creditResponse = parsedResponse["results"]["data"]["credit"]
             
             return {
-                "statusCode": 200,
+                "status_code": 200,
                 "license": licenseResponse,
                 "credit": creditResponse
             }
         except KeyError as e:
-            licensing.abort(500, e.__doc__, status = "Could not retrieve information", statusCode = "500")
+            licensing.abort(500, e.__doc__, status = "Could not retrieve information", status_code = "500")
         except Exception as e:
-            licensing.abort(400, e.__doc__, status = "Could not retrieve information", statusCode = "400")
+            licensing.abort(400, e.__doc__, status = "Exception from Query Licensing method", status_code = "400")
 
 @licensing.route("/activation")
 class MainClass(Resource):
+    @token_required
     @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' })
     @app.expect(activation_extension_model)
     def post(self):
@@ -276,7 +308,7 @@ class MainClass(Resource):
             responseCode = parsedResponse["code"]
             if(responseCode != 200):
                 return {
-                    "statusCode": 500,
+                    "status_code": 500,
                     "message": "Error in Activating POC License",
                 }
 
@@ -285,19 +317,20 @@ class MainClass(Resource):
             email_notification_response = send_email_mailjet(insertResult["new_history"])
             
             return {
-                "statusCode": 200,
+                "status_code": 200,
                 "message": "Success",
                 "insertResponse": insertResult["insert_response"],
                 "decrementResponse": decrementResponse,
                 "email_notification_response": email_notification_response
             }
         except KeyError as e:
-            licensing.abort(400, e.__doc__, status = "Could not retrieve information", statusCode = "400")
+            licensing.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
-            licensing.abort(500, e.__doc__, status = "Exception from the method", statusCode = "500")
+            licensing.abort(500, e.__doc__, status = "Exception from Activation method", status_code = "500")
 
 @licensing.route("/extension")
 class MainClass(Resource):
+    @token_required
     @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' })
     @app.expect(activation_extension_model)
     def post(self):
@@ -314,7 +347,7 @@ class MainClass(Resource):
             responseCode = parsedResponse["code"]
             if(responseCode != 200):
                 return {
-                    "statusCode": 500,
+                    "status_code": 500,
                     "message": "Error in Extending POC License",
                 }
                 
@@ -323,16 +356,16 @@ class MainClass(Resource):
             email_notification_response = send_email_mailjet(insertResult["new_history"])
 
             return {
-                "statusCode": 200,
+                "status_code": 200,
                 "message": "Success",
                 "insertResponse": insertResult["insert_response"],
                 "decrementResponse": decrementResponse,
                 "email_notification_response": email_notification_response
             }
         except KeyError as e:
-            licensing.abort(400, e.__doc__, status = "Could not retrieve information", statusCode = "400")
+            licensing.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
-            licensing.abort(500, e.__doc__, status = "Exception from the method", statusCode = "500")
+            licensing.abort(500, e.__doc__, status = "Exception from Extension method", status_code = "500")
 
 
 def insert_history(username, actionType, domainName, numberOfDays):
@@ -344,7 +377,7 @@ def insert_history(username, actionType, domainName, numberOfDays):
                     "dateExpired": datetime.utcnow() + timedelta(days=numberOfDays)
                 }
                 
-    response = mongoClient.db.history.insert_one(new_history)
+    response = mongo_client.db.history.insert_one(new_history)
     return {
         "insert_response": 200,
         "new_history": new_history
@@ -354,7 +387,7 @@ def inc_poc_license(username, accountType, inc_value):
     if(accountType == "admin"):
         return 200
     
-    response = mongoClient.db.credentials.find_one_and_update({ "username": username }, {'$inc': {'pocLicenseCounter': inc_value}})
+    response = mongo_client.db.credentials.find_one_and_update({ "username": username }, {'$inc': {'pocLicenseCounter': inc_value}})
     return 200
     
 def send_email_notification():
