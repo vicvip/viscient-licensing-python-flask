@@ -1,9 +1,10 @@
+# Module imports
 import requests
 import pymongo
 import json
 import smtplib
 import bson
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_restplus import Api, Resource, fields
 from flask_pymongo import PyMongo
 from datetime import datetime, timedelta
@@ -12,9 +13,16 @@ from bson import json_util
 from mailjet_rest import Client
 from functools import wraps
 
-flask_app = Flask(__name__)
+# Constants 
+MONGO_URI = 'mongodb+srv://viscient:P!nkUnic0rn@viscient-cluster-dmqxq.gcp.mongodb.net/viscient-licensing?retryWrites=true'
+API_KEY = 'OdRGF2aAqH323q0WlX5JOfRtaCVpQbbN'
+VISCIENT_API_URL = 'https://viscientgateway.ddns.net:8899/VLREST/v1'
+MAILJET_API_KEY = 'a69cb7f74803eeeed3c31b28a62a8642'
+MAILJET_API_SECRET = '1998b948eba95af112065aa042ceb838'
 
-flask_app.config["MONGO_URI"] = "mongodb+srv://viscient:P!nkUnic0rn@viscient-cluster-dmqxq.gcp.mongodb.net/viscient-licensing?retryWrites=true"
+# Configurations
+flask_app = Flask(__name__)
+flask_app.config["MONGO_URI"] = MONGO_URI
 mongo_client = PyMongo(flask_app)
 
 authorizations = {
@@ -32,19 +40,11 @@ app = Api(app = flask_app,
 		  title = "Viscient Licensing BackEnd", 
 		  description = "Thin layer to provide endpoints for the Front End")
 
-licensing = app.namespace('licensing', description='Endpoints that talks to Viscient Licensing API')
+licensing_service = app.namespace('licensing', description='Endpoints that talks to Viscient Licensing API')
 mongo_db_service = app.namespace('mongodbservice', description='Endpoints that talks to MongoDb')
 
-VISCIENT_API_URL = 'https://viscientgateway.ddns.net:8899/VLREST/v1'
-API_KEY = 'OdRGF2aAqH323q0WlX5JOfRtaCVpQbbN'
 
-model = app.model('Name Model', 
-        {
-        'name': fields.String(required = True, 
-                description="Name of the person", 
-                help="Name cannot be blank.")
-        })
-
+# Models
 credential_model = app.model('Credential Model', 
                     {
                     'username': fields.String(required = True, 
@@ -75,6 +75,7 @@ increment_model = app.model('Increment Credit Model',
                             description="Number of credit to add to the respective user")
                     })
 
+# Custom Decorators
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -87,6 +88,118 @@ def token_required(f):
             return {'message': 'Authorization failed.'}, 403
         return f(*args, **kwargs)
     return decorated
+
+# Licensing Endpoints
+@licensing_service.route("/query_licensing")
+class MainClass(Resource):
+    @token_required
+    @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Mapping Key Error' }, 
+                params={ 'username': 'Specify the username to fetch in Viscient Licensing API' })
+    def get(self):
+        try:
+            username = request.args.get('username')
+            endpoint = f"{VISCIENT_API_URL}/query_license"
+            post_url = endpoint
+            response = requests.post(post_url, data=None, headers=None)
+            parsedResponse = json.loads(response.content)
+            responseCode = parsedResponse["code"]
+            if(responseCode != 200):
+                return {
+                    "status_code": 500,
+                    "license": None,
+                    "credit": None
+                }
+
+            licenseResponse = parsedResponse["results"]["data"]["license"]
+            creditResponse = parsedResponse["results"]["data"]["credit"]
+            
+            return {
+                "status_code": 200,
+                "license": licenseResponse,
+                "credit": creditResponse
+            }
+        except KeyError as e:
+            licensing_serviceabort(500, e.__doc__, status = "Could not retrieve information", status_code = "500")
+        except Exception as e:
+            licensing_serviceabort(400, e.__doc__, status = "Exception from Query Licensing method", status_code = "400")
+
+@licensing_service.route("/activation")
+class MainClass(Resource):
+    @token_required
+    @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' })
+    @app.expect(activation_extension_model)
+    def post(self):
+        try:
+            username = request.json['username']
+            domainName = request.json['domainName']
+            numberOfDays = request.json['numberOfDays']
+            accountType = request.json['accountType']
+
+            endpoint = f"{VISCIENT_API_URL}/remote_activate_poc?company_name={username}&domain_name={domainName}&number_of_days={numberOfDays}"
+            post_url = endpoint
+            response = requests.post(post_url, data=None, headers=None)
+            parsedResponse = json.loads(response.content)
+            responseCode = parsedResponse["code"]
+            if(responseCode != 200):
+                return {
+                    "status_code": 500,
+                    "message": "Error in Activating POC License",
+                }
+
+            insertResult = insert_history(username, "Activate POC", domainName, numberOfDays)
+            decrementResponse = inc_poc_license(username, accountType, -1)
+            email_notification_response = send_email_mailjet(insertResult["new_history"])
+            
+            return {
+                "status_code": 200,
+                "message": "Success",
+                "insertResponse": insertResult["insert_response"],
+                "decrementResponse": decrementResponse,
+                "email_notification_response": email_notification_response
+            }
+        except KeyError as e:
+            licensing_serviceabort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
+        except Exception as e:
+            licensing_serviceabort(500, e.__doc__, status = "Exception from Activation method", status_code = "500")
+
+@licensing_service.route("/extension")
+class MainClass(Resource):
+    @token_required
+    @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' })
+    @app.expect(activation_extension_model)
+    def post(self):
+        try:
+            username = request.json['username']
+            domainName = request.json['domainName']
+            numberOfDays = request.json['numberOfDays']
+            accountType = request.json['accountType']
+
+            endpoint = f"{VISCIENT_API_URL}/extend_poc_license?company_name={username}&domain_name={domainName}&number_of_days={numberOfDays}"
+            post_url = endpoint
+            response = requests.post(post_url, data=None, headers=None)
+            parsedResponse = json.loads(response.content)
+            responseCode = parsedResponse["code"]
+            if(responseCode != 200):
+                return {
+                    "status_code": 500,
+                    "message": "Error in Extending POC License",
+                }
+                
+            insertResult = insert_history(username, "Extend POC", domainName, numberOfDays)
+            decrementResponse = inc_poc_license(username, accountType, -1)
+            email_notification_response = send_email_mailjet(insertResult["new_history"])
+
+            return {
+                "status_code": 200,
+                "message": "Success",
+                "insertResponse": insertResult["insert_response"],
+                "decrementResponse": decrementResponse,
+                "email_notification_response": email_notification_response
+            }
+        except KeyError as e:
+            licensing_serviceabort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
+        except Exception as e:
+            licensing_serviceabort(500, e.__doc__, status = "Exception from Extension method", status_code = "500")
 
 @mongo_db_service.route("/login")
 class MainClass(Resource):
@@ -108,13 +221,13 @@ class MainClass(Resource):
                     "accountType": ''
                 }
                 
-            accountType = user['accountType']
+            account_type = user['accountType']
 
             return {
                 "username": username,
                 "status_code": 200,
                 "message": "User found",
-                "accountType": accountType
+                "accountType": account_type
             }
         except KeyError as e:
             mongo_db_service.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
@@ -146,19 +259,14 @@ class MainClass(Resource):
                     "message": "No such user found in History collection",
                     "username": username
                 }
+                
+            history_details = list(histories)
+            for history in history_details:
+                history['dateCreated'] = history['dateCreated'].isoformat()
+                history['dateExpired'] = history['dateExpired'].isoformat()
 
-            history_details = []
-            for history in histories:
-                historyDetail = {
-                    'username': history['username'],
-                    'actionType': history['actionType'],
-                    'domainName': history['domainName'],
-                    'dateCreated': history['dateCreated'].isoformat(),
-                    'dateExpired': history['dateExpired'].isoformat(),
-                }
-                history_details.append(historyDetail)
-            
-            return jsonify(history_details=history_details, status_code=200)
+            json_dumped = dumps({"history_details": history_details, "status_code":200}, default=json_util.default)
+            return Response(json_dumped, mimetype='application/json')
         except KeyError as e:
             mongo_db_service.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
@@ -209,17 +317,11 @@ class MainClass(Resource):
                 return "empty database"
 
             userList = list(users)
-            user_details = []
             for user in userList:
-                userDetail = {
-                    'username': user['username'],
-                    'pocLicenseCounter': user['pocLicenseCounter'],
-                    'accountType': user['accountType']
-                }
-                user_details.append(userDetail)
-            
-            return jsonify(user_details=user_details, status_code=200)
+                del user['password']
 
+            json_dumped = dumps({"user_details": userList, "status_code":200}, default=json_util.default)
+            return Response(json_dumped, mimetype='application/json')
         except KeyError as e:
             mongo_db_service.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
@@ -255,118 +357,6 @@ class MainClass(Resource):
             mongo_db_service.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
         except Exception as e:
             mongo_db_service.abort(500, e.__doc__, status = "Exception from Increment User Credit method", status_code = "500")
-
-@licensing.route("/query_licensing")
-class MainClass(Resource):
-    @token_required
-    @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Mapping Key Error' }, 
-                params={ 'username': 'Specify the username to fetch in Viscient Licensing API' })
-    def get(self):
-        try:
-            username = request.args.get('username')
-            endpoint = f"{VISCIENT_API_URL}/query_license"
-            post_url = endpoint
-            response = requests.post(post_url, data=None, headers=None)
-            parsedResponse = json.loads(response.content)
-            responseCode = parsedResponse["code"]
-            if(responseCode != 200):
-                return {
-                    "status_code": 500,
-                    "license": None,
-                    "credit": None
-                }
-
-            licenseResponse = parsedResponse["results"]["data"]["license"]
-            creditResponse = parsedResponse["results"]["data"]["credit"]
-            
-            return {
-                "status_code": 200,
-                "license": licenseResponse,
-                "credit": creditResponse
-            }
-        except KeyError as e:
-            licensing.abort(500, e.__doc__, status = "Could not retrieve information", status_code = "500")
-        except Exception as e:
-            licensing.abort(400, e.__doc__, status = "Exception from Query Licensing method", status_code = "400")
-
-@licensing.route("/activation")
-class MainClass(Resource):
-    @token_required
-    @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' })
-    @app.expect(activation_extension_model)
-    def post(self):
-        try:
-            username = request.json['username']
-            domainName = request.json['domainName']
-            numberOfDays = request.json['numberOfDays']
-            accountType = request.json['accountType']
-
-            endpoint = f"{VISCIENT_API_URL}/remote_activate_poc?company_name={username}&domain_name={domainName}&number_of_days={numberOfDays}"
-            post_url = endpoint
-            response = requests.post(post_url, data=None, headers=None)
-            parsedResponse = json.loads(response.content)
-            responseCode = parsedResponse["code"]
-            if(responseCode != 200):
-                return {
-                    "status_code": 500,
-                    "message": "Error in Activating POC License",
-                }
-
-            insertResult = insert_history(username, "Activate POC", domainName, numberOfDays)
-            decrementResponse = inc_poc_license(username, accountType, -1)
-            email_notification_response = send_email_mailjet(insertResult["new_history"])
-            
-            return {
-                "status_code": 200,
-                "message": "Success",
-                "insertResponse": insertResult["insert_response"],
-                "decrementResponse": decrementResponse,
-                "email_notification_response": email_notification_response
-            }
-        except KeyError as e:
-            licensing.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
-        except Exception as e:
-            licensing.abort(500, e.__doc__, status = "Exception from Activation method", status_code = "500")
-
-@licensing.route("/extension")
-class MainClass(Resource):
-    @token_required
-    @app.doc(responses={ 200: 'OK', 400: 'Invalid Argument', 500: 'Internal Error' })
-    @app.expect(activation_extension_model)
-    def post(self):
-        try:
-            username = request.json['username']
-            domainName = request.json['domainName']
-            numberOfDays = request.json['numberOfDays']
-            accountType = request.json['accountType']
-
-            endpoint = f"{VISCIENT_API_URL}/extend_poc_license?company_name={username}&domain_name={domainName}&number_of_days={numberOfDays}"
-            post_url = endpoint
-            response = requests.post(post_url, data=None, headers=None)
-            parsedResponse = json.loads(response.content)
-            responseCode = parsedResponse["code"]
-            if(responseCode != 200):
-                return {
-                    "status_code": 500,
-                    "message": "Error in Extending POC License",
-                }
-                
-            insertResult = insert_history(username, "Extend POC", domainName, numberOfDays)
-            decrementResponse = inc_poc_license(username, accountType, -1)
-            email_notification_response = send_email_mailjet(insertResult["new_history"])
-
-            return {
-                "status_code": 200,
-                "message": "Success",
-                "insertResponse": insertResult["insert_response"],
-                "decrementResponse": decrementResponse,
-                "email_notification_response": email_notification_response
-            }
-        except KeyError as e:
-            licensing.abort(400, e.__doc__, status = "Could not retrieve information", status_code = "400")
-        except Exception as e:
-            licensing.abort(500, e.__doc__, status = "Exception from Extension method", status_code = "500")
-
 
 def insert_history(username, actionType, domainName, numberOfDays):
     new_history = {
@@ -419,9 +409,7 @@ def send_email_notification():
         print('Error occured')
 
 def send_email_mailjet(new_history):
-    api_key = 'a69cb7f74803eeeed3c31b28a62a8642'
-    api_secret = '1998b948eba95af112065aa042ceb838'
-    mailjet = Client(auth=(api_key, api_secret), version='v3.1')
+    mailjet = Client(auth=(MAILJET_API_KEY, MAILJET_API_SECRET), version='v3.1')
 
     construct_message_subject = f'A new "{new_history["actionType"]}" has been triggered from {new_history["username"]}'
 
