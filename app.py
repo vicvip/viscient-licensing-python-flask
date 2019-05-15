@@ -14,7 +14,7 @@ from mailjet_rest import Client
 from functools import wraps
 
 # Constants 
-MONGO_URI = 'mongodb+srv://viscient:P!nkUnic0rn@viscient-cluster-dmqxq.gcp.mongodb.net/viscient-licensing?retryWrites=true'
+MONGO_URI = 'mongodb+srv://viscient:P!nkUnic0rn@viscient-cluster-dmqxq.gcp.mongodb.net/viscient-licensing-prod?retryWrites=true'
 API_KEY = 'OdRGF2aAqH323q0WlX5JOfRtaCVpQbbN'
 VISCIENT_API_URL = 'https://viscientgateway.ddns.net:8899/VLREST/v1'
 MAILJET_API_KEY = 'a69cb7f74803eeeed3c31b28a62a8642'
